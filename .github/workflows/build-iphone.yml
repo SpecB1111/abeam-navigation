@@ -27,6 +27,16 @@ jobs:
       - name: Build iPhone and compile CarPlay
         working-directory: source/Abeam
         run: bash Scripts/build-ipa.sh
+      - name: Test iPhone interface
+        working-directory: source/Abeam
+        run: bash Scripts/test-iphone.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Abeam-UI-validation
+          path: |
+            source/Abeam/build/AbeamUI.xcresult
+            source/Abeam/build/Abeam-iPhone.png
       - uses: actions/upload-artifact@v4
         with:
           name: Abeam-iPhone
@@ -47,6 +57,10 @@ jobs:
         with:
           name: Abeam-iPhone
           path: installer
+      - uses: actions/download-artifact@v4
+        with:
+          name: Abeam-UI-validation
+          path: validation
       - name: Publish tested build
         env:
           SOURCE_SHA: ${{ github.sha }}
@@ -60,6 +74,7 @@ jobs:
           fi
           git checkout main
           cp installer/Abeam.ipa Abeam.ipa
+          cp validation/Abeam-iPhone.png Abeam-iPhone.png
           python3 - <<'PY'
           import hashlib,json,os,plistlib,zipfile
           from pathlib import Path
@@ -72,7 +87,7 @@ jobs:
           PY
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add Abeam.ipa BUILD-INFO.json
+          git add Abeam.ipa BUILD-INFO.json Abeam-iPhone.png
           if git diff --cached --quiet; then exit 0; fi
           git commit -m "Publish tested Abeam iPhone build"
           git push origin HEAD:main
