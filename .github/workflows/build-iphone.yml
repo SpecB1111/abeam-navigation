@@ -1,0 +1,78 @@
+name: Build Abeam for iPhone
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [Abeam.zip, .github/workflows/build-iphone.yml]
+permissions:
+  contents: read
+concurrency:
+  group: abeam-iphone
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Extract app
+        run: unzip -q Abeam.zip -d source
+      - name: Test navigation calculations
+        working-directory: source/Abeam
+        run: swift test
+      - name: Prepare Xcode project generator
+        run: command -v xcodegen || brew install xcodegen
+      - name: Build iPhone and compile CarPlay
+        working-directory: source/Abeam
+        run: bash Scripts/build-ipa.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Abeam-iPhone
+          path: source/Abeam/build/Abeam.ipa
+          if-no-files-found: error
+          retention-days: 7
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: Abeam-iPhone
+          path: installer
+      - name: Publish tested build
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          BUILD_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          if ! git diff --quiet "$SOURCE_SHA" origin/main -- Abeam.zip .github/workflows/build-iphone.yml; then
+            echo "Newer source exists; preserving newer build."
+            exit 0
+          fi
+          git checkout main
+          cp installer/Abeam.ipa Abeam.ipa
+          python3 - <<'PY'
+          import hashlib,json,os,plistlib,zipfile
+          from pathlib import Path
+          path=Path('Abeam.ipa')
+          with zipfile.ZipFile(path) as archive:
+              assert archive.testzip() is None
+              info=plistlib.loads(archive.read('Payload/Abeam.app/Info.plist'))
+              assert info['CFBundleIdentifier']=='au.specb1111.abeam'
+          Path('BUILD-INFO.json').write_text(json.dumps({'version':info['CFBundleShortVersionString'],'build':info['CFBundleVersion'],'source_commit':os.environ['SOURCE_SHA'],'workflow_run':os.environ['BUILD_URL'],'sha256':hashlib.sha256(path.read_bytes()).hexdigest(),'signing':'Unsigned; install with AltStore. CarPlay entitlement not included.'},indent=2)+'\n')
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Abeam.ipa BUILD-INFO.json
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "Publish tested Abeam iPhone build"
+          git push origin HEAD:main
